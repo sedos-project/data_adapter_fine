@@ -1,5 +1,5 @@
-name: myvenv
+name: data_adapter_fine
 dependencies:
-- python=3.6
+- python=3.10
 - pip:
    - -r requirements.txt
