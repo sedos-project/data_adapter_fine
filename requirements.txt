@@ -1,2 +1,1 @@
-pandas
 git+https://github.com/sedos-project/data_adapter.git
