@@ -3,20 +3,16 @@ import os
 os.environ["COLLECTIONS_DIR"] = "../collections/"
 os.environ["STRUCTURES_DIR"] = "../structures"
 
-from data_adapter.preprocessing import Adapter
-from data_adapter.structure import Structure
-
 from data_adapter_fine import DataAdapter
 
 
 da = DataAdapter(
-    url="https://databus.openenergyplatform.org/johannes_beh/collections/johannes_sedos_emob",
-    downloadData=False
+    url="https://databus.openenergyplatform.org/johannes_beh/collections/seods_tra_v1",
+    # downloadData=False,
+    structure_name="tra_v2",
+    process_sheet="mimo_test",
+    # process_sheet="Processes_tra_road_car"
 )
-da.get_data_from_collection(structure_name="tra", process_sheet="Processes_tra_road_car")
-
-da.build_esM()
-
 
 print('test')
 # from data_adapter import databus
