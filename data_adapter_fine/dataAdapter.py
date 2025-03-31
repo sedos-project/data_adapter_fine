@@ -4,7 +4,8 @@ import logging
 import numpy as np
 import pandas as pd
 import pyomo.environ as pyomo
-
+import re
+from scipy.interpolate import interp1d
 
 import fine as fn
 from data_adapter import databus
@@ -23,13 +24,18 @@ class DataAdapter:
             process_sheet: str,
             helper_sheet: str,
             downloadData: bool = True,
+            veh_class: str = '',
     ):
         self.op_flex_opt = None
         if downloadData:
             databus.download_collection(url)
         self.collection_name = url.split('/')[-1]
-        self.scenario = 'f_tra_tokio'
+        self.scenario = 'f_tra_tokio_final'
         self.bev_constraint_data = {}
+        self.constructor_dict = {}
+
+        self.market_source_df = pd.DataFrame()
+        self.market_sink_df = pd.DataFrame()
 
         self.structure = Structure(
             structure_name,
@@ -48,36 +54,89 @@ class DataAdapter:
         }
         self.esM = self.init_esM()
 
-        self.esM.add(
-            fn.Source(
-                esM=self.esM,
-                name='slack_source_mcar_demand',
-                commodity='exo_road_mcar_pkm',
-                hasCapacityVariable=False,
-                opexPerOperation=1000000,
+        if veh_class != '':
+            self.esM.add(
+                fn.Source(
+                    esM=self.esM,
+                    name='slack_source_' + veh_class + '_demand',
+                    commodity='exo_road_' + veh_class + '_pkm',
+                    hasCapacityVariable=False,
+                    opexPerOperation=10000,
+                )
             )
-        )
 
-        self.esM.add(
-            fn.Source(
-                esM=self.esM,
-                name='source_electricity',
-                commodity='sec_elec',
-                hasCapacityVariable=False,
-                opexPerOperation=1,
-            )
-        )
+        self.add_electricity_market()
 
         self.processes = {
             process: self.adapter.get_process(process)
             for process in list(self.structure.processes.keys())
-            if process not in ['tra_road_mcar_ice_pass_methanol_1', 'x2x_import_uran',
-                               'x2x_import_deuterium', 'x2x_x2liquid_ft_1', 'x2x_g2p_h2_fuel_cell_1_ag',
-                               'x2x_x2gas_sr_syngas_psa_0', 'x2x_x2gas_sr_syngas_psa_1', 'x2x_delivery_naphtha'] #TODO remove
         }
 
         self.add_processes_to_esM()
         print('All processes added to esM')
+
+    def add_electricity_market(self):
+        electricity_costs = pd.read_csv(
+            os.environ["COLLECTIONS_DIR"] + 'electricity_data/DE00_Mgl Cost.csv', usecols=['2035','2040','2050']
+        ).T
+        electricity_costs.index = electricity_costs.index.astype(int)
+        for year in pd.Index(self.esM.investmentPeriodNames).difference(electricity_costs.index):
+            electricity_costs.loc[year] = np.nan
+
+        electricity_costs_sum = electricity_costs.sum(axis=1)
+        electricity_costs_sum = electricity_costs_sum.replace(0,  np.nan).sort_index()#.interpolate(method='index', limit_area='inside')
+        f = interp1d(
+            electricity_costs_sum.dropna().index.values,
+            electricity_costs_sum.dropna().values,
+            fill_value='extrapolate'
+        )
+        electricity_costs_sum.loc[electricity_costs_sum.index] = f(electricity_costs_sum.index)
+        for ip in self.esM.investmentPeriodNames:
+            if ip <= 2035:
+                electricity_costs.loc[ip] = (
+                        electricity_costs.loc[2035]
+                        / electricity_costs_sum[2035]
+                        * electricity_costs_sum[ip]
+                )
+            elif ip < 2050:
+                electricity_costs.loc[ip] = (
+                        electricity_costs.loc[2040]
+                        / electricity_costs_sum[2040]
+                        * electricity_costs_sum[ip]
+                )
+            else:
+                electricity_costs.loc[ip] = (
+                        electricity_costs.loc[2050]
+                        / electricity_costs_sum[2050]
+                        * electricity_costs_sum[ip]
+                )
+
+        electricity_costs = electricity_costs / 1000
+        electricity_costs_with_grid = electricity_costs + 0.082
+        electricity_costs = electricity_costs.loc[self.esM.investmentPeriodNames].T.to_dict(orient='series')
+        electricity_costs_with_grid = electricity_costs_with_grid.loc[self.esM.investmentPeriodNames].T.to_dict(orient='series')
+        self.esM.add(
+            fn.Source(
+                esM=self.esM,
+                name='electricity_market_source',
+                commodity='sec_elec',
+                hasCapacityVariable=False,
+                commodityCostTimeSeries=electricity_costs_with_grid,
+                interestRate=0.02,
+            )
+        )
+        self.esM.add(
+            fn.Sink(
+                esM=self.esM,
+                name='electricity_market_sink',
+                commodity='sec_elec',
+                hasCapacityVariable=False,
+                commodityRevenueTimeSeries=electricity_costs,
+                interestRate=0.02,
+                operationRateMax=100,
+            )
+        )
+
 
     def add_processes_to_esM(self):
         for process in self.processes.items():
@@ -133,7 +192,7 @@ class DataAdapter:
 
                 constructor = ConversionConstructor(process, self.esM, op_timeseries, main_commodity)
 
-            if process[0].startswith('tra_road_') and process[0].endswith('1') and 'bev_pass_engine' in process[0]:
+            if process[0].startswith('tra_road_') and process[0].endswith('1') and re.search('bev_.*_engine', process[0]):
                 self.get_data_for_bev_constraints(constructor)
                 constructor.col_set = constructor.col_set.difference(['share_tra_charge_mode'])
 
@@ -141,6 +200,7 @@ class DataAdapter:
                 raise ValueError(f"Unused columns in {process[0]}: {constructor.col_set}")
             for comp in constructor.comps:
                 self.esM.add(comp)
+            self.constructor_dict[process[0]] = constructor
             print(f'Added {process[0]} to esM')
 
     def get_commodities(self):
@@ -155,6 +215,26 @@ class DataAdapter:
         return commodities
 
     def init_esM(self):
+        # calculate emission budget
+        # emission reduction targets for Germany according to Umweltbundesamt
+        # https://www.umweltbundesamt.de/daten/klima/treibhausgasminderungsziele-deutschlands#projektionsdaten-2024
+        # assuming net-zero emissions in 2045
+        emission_budget = pd.Series({2021: 144.4, 2030: 82, 2045: 0})
+        # scale emission budget to mcars (in 2021 63.38 Mt co2 emissions according to stock)
+        emission_budget = emission_budget * 63.38 / 144.4
+        for year in range(2028, 2077, 7):
+            emission_budget[year] = np.nan
+        emission_budget = emission_budget.interpolate(method='index').drop([2030, 2045])
+
+        balance_limit = {
+            ip: pd.DataFrame(
+                index=["emissions"],
+                columns=["Germany", "lowerBound"],
+                data=[[-emission_budget[ip], True]]
+            )
+            for ip in emission_budget.index
+        }
+
         esM = fn.EnergySystemModel(
             locations={'Germany'},
             commodities=self.commodities,
@@ -167,6 +247,7 @@ class DataAdapter:
             costUnit=utils.standard_units['cost'],
             lengthUnit="km",
             verboseLogLevel=0,
+            balanceLimit=balance_limit,
         )
 
         return esM
@@ -187,9 +268,34 @@ class DataAdapter:
                 name='co2_sink',
                 commodity='co2_equivalent',
                 hasCapacityVariable=False,
+                balanceLimitID='emissions',
             )
         )
-        emi_co2_dict = {commod: -1 for commod in self.commodities if commod.startswith('emi_co2')}
+        #include co2 source to ensure operation of dac components
+        self.esM.add(
+            fn.Source(
+                esM=self.esM,
+                name='co2_source',
+                commodity='co2_equivalent',
+                hasCapacityVariable=False,
+                balanceLimitID='emissions',
+            )
+        )
+        self.esM.add(
+            fn.Sink(
+                esM=self.esM,
+                name='co2_stored_sink',
+                commodity='emi_co2_stored',
+                hasCapacityVariable=False,
+            )
+        )
+
+        emi_co2_dict = {
+            commod: -1 for commod in self.commodities
+            if commod.startswith('emi_co2')
+            and not 'neg' in commod
+            and not commod in ['emi_co2_stored', 'emi_co2_reusable']
+        }
         # scale unit for CH4 emissions in the x2x and tra sector by 1e-3 for smaller coefficients
         emi_ch4_dict = {commod: -1 / 28 * 1e3 for commod in self.commodities if commod.startswith('emi_ch4')}
         # scale unit for N2O emissions in the x2x and tra sector by 1e-6 for smaller coefficients
@@ -222,7 +328,7 @@ class DataAdapter:
             if commodity in utils.slack_sink_opex.keys():
                 opex = utils.slack_sink_opex[commodity]
             else:
-                opex = 0.0001
+                opex = 10
             self.esM.add(
                 fn.Sink(
                     esM=self.esM,
@@ -230,6 +336,15 @@ class DataAdapter:
                     commodity=commodity,
                     hasCapacityVariable=False,
                     opexPerOperation=opex,
+                )
+            )
+            self.esM.add(
+                fn.Source(
+                    esM=self.esM,
+                    name='slack_source_'+commodity,
+                    commodity=commodity,
+                    hasCapacityVariable=False,
+                    opexPerOperation=100000,
                 )
             )
 
@@ -252,10 +367,10 @@ class DataAdapter:
                 self.bev_constraint_data[car_class][['flex_uni', 'flex_bi']].div(
                     self.bev_constraint_data[car_class]['infl_uni'], axis=0)
             )
-        commisVar = self.esM.pyM.commis_conv
+        commisVar = self.esM.pyM.cap_conv
         loc = list(self.esM.locations)[0]
 
-        def bev_commissioning_constraint(pyM, car_class, bev_type, ip):
+        def bev_capacity_constraint(pyM, car_class, bev_type, ip):
             infl_name = f'tra_road_{car_class}_bev_pass_engine_infl_uni_1'
             flex_name = f'tra_road_{car_class}_bev_pass_engine_flex_{bev_type}_1'
 
@@ -265,29 +380,57 @@ class DataAdapter:
                     * self.bev_constraint_data[car_class]['flex_' + bev_type].loc[self.esM.investmentPeriodNames[ip]]
             )
 
-        self.esM.pyM.bev_commissioning_constraint = pyomo.Constraint(
+        self.esM.pyM.bev_capacity_constraint = pyomo.Constraint(
             self.bev_constraint_data.keys(),
             ['uni', 'bi'],
             self.esM.investmentPeriods,
-            rule=bev_commissioning_constraint
+            rule=bev_capacity_constraint
         )
 
-    def optimize(self):
+        opVarStor = self.esM.pyM.chargeOp_stor
+        opVarConv = self.esM.pyM.op_conv
+
+        def bev_battery_constraint(pyM, car_class, bev_type, ip, p, t):
+            if bev_type.endswith('0') or bev_type.endswith('1'):
+                new = bev_type[-1]
+                bev_type = bev_type[:-2]
+            else:
+                new = '1'
+            batt_name = f'tra_road_{car_class}_bev_pass_battery_{bev_type}_{new}'
+            wallbox_name = f'tra_road_{car_class}_bev_pass_wallbox_{bev_type}_g2v_{new}'
+            charge_efficiency = self.esM.getComponent(batt_name).chargeEfficiency
+            wallbox_ccf = self.esM.getComponent(wallbox_name).processedCommodityConversionFactors[ip]
+            wallbox_efficiency = abs(wallbox_ccf[f'sec_elec_{car_class}_{bev_type}'] / wallbox_ccf['sec_elec'])
+
+            return (
+                    opVarStor[loc, batt_name, ip, p, t] * charge_efficiency
+                    >= opVarConv[loc, wallbox_name, ip, p, t] * wallbox_efficiency * 0.999
+            )
+
+        self.esM.pyM.bev_battery_constraint = pyomo.Constraint(
+            self.bev_constraint_data.keys(),
+            ['infl_uni_0', 'infl_uni_1', 'flex_uni', 'flex_bi'],
+            self.esM.pyM.timeSet,
+            rule=bev_battery_constraint
+        )
+
+    def optimize(self, numberOfTypicalPeriods):
         self.add_co2_sink()
         self.add_slack_sinks()
-        # self.esM.aggregateTemporally(numberOfTypicalPeriods=1, numberOfTimeStepsPerPeriod=1)
-        self.esM.aggregateTemporally(numberOfTypicalPeriods=1, segmentation=False)
+        optimization_specs = "IntFeasTol=1e-3 NumericFocus=1 BarHomogeneous=1 ScaleFlag=2"
+        self.esM.aggregateTemporally(numberOfTypicalPeriods=numberOfTypicalPeriods, segmentation=False)
         self.esM.declareOptimizationProblem(timeSeriesAggregation=True)
-        # self.esM.declareOptimizationProblem(timeSeriesAggregation=False)
         self.declare_bev_constraints()
         self.esM.optimize(
             declaresOptimizationProblem=False,
             timeSeriesAggregation=True,
+            optimizationSpecs=optimization_specs,
             solver="gurobi"
         )
         self.check_slacks(
             exclusion_list=[
-                'slack_sink_sec_kerosene_fos_orig',
+                'slack_sink_sec_kerosene',
+                'slack_sink_sec_naphtha',
                 'slack_sink_sec_refinery_gas',
                 'slack_sink_sec_heat_low'
             ]
@@ -310,22 +453,24 @@ class DataAdapter:
         for model_name, model in self.esM.componentModelingDict.items():
             model_results = model._optSummary.copy()
             for comp_name in model.componentsDict.keys():
+                if 'slack_' in comp_name:
+                    continue
                 comp_df = self.get_comp_results(
                     comp_name,
                     {ip: df.loc[comp_name] for ip, df in model_results.items()}
                 )
                 results_df = pd.concat([results_df, comp_df], ignore_index=True)
         results_df = results_df.reindex(
-            columns=['scenario', 'year', 'process', 'parameter', 'sector', 'category', 'specification', 'groups',
-                     'new', 'input_groups', 'output_groups', 'unit', 'value']
+            columns=['scenario', 'process', 'parameter', 'sector', 'category', 'specification', 'new',
+                     'groups', 'input_groups', 'output_groups', 'year', 'unit', 'value']
         )
         results_df.loc[
             (results_df['unit'] == utils.standard_units['power']) & (results_df['parameter'] == 'flow_volume'), 'unit'
         ] = utils.standard_units['energy']
         if os.getcwd().endswith('data_adapter_fine'):
-            results_df.to_csv('examples/output/test_results.csv', index=False, sep=';')
+            results_df.to_csv('examples/output/'+self.scenario+'.csv', index=True, sep=';', index_label='id')
         else:
-            results_df.to_csv('output/test_results.csv', index=False, sep=';')
+            results_df.to_csv('output/'+self.scenario+'.csv', index=True, sep=';', index_label='id')
 
         return results_df
 
@@ -354,7 +499,7 @@ class DataAdapter:
             'capacity_new': 'commissioning',
             'costs_investment': 'capexCap',
             'costs_fixed': 'opexCap',
-            # 'costs_variable': 'opexOp',
+            'costs_variable': 'opexOp',
         }
 
         # set capacity, commissioning, and cost results for each investment period
@@ -417,13 +562,46 @@ class DataAdapter:
                     comp_df = pd.concat([comp_df, pd.DataFrame(comp_results_flow)])
                 if len(comp_df[comp_df['parameter'] == 'flow_volume']['unit'].unique()) == 1:
                     comp_results_flow['output_groups'] = [['losses']]
-                    comp_results_flow['input_groups'] = [[None]]
-                    comp_results_flow['value'] = comp_df[
+                    comp_results_flow['input_groups'] = [None]
+                    comp_results_flow['value'] = (
+                        comp_df[
                             (comp_df['parameter'] == 'flow_volume')
                             & (comp_df['year'] == ip)
+                            & (comp_df['input_groups'].notna())
                         ]['value'].sum()
+                        - comp_df[
+                            (comp_df['parameter'] == 'flow_volume')
+                            & (comp_df['year'] == ip)
+                            & (comp_df['output_groups'].notna())
+                        ]['value'].sum()
+                    )
                     comp_df = pd.concat([comp_df, pd.DataFrame(comp_results_flow)])
         comp_df['value'] = comp_df['value'].fillna(0)
 
         return comp_df
+
+    def calc_electricity_market_data(self):
+        for ip in self.esM.investmentPeriodNames:
+            market_source = self.esM.getComponent('electricity_market_source').aggregatedCommodityCostTimeSeries[
+                self.esM.investmentPeriodNames.index(ip)
+            ]
+            market_source = market_source.unstack(level=-1)
+            market_source.columns = market_source.columns.droplevel()
+
+            market_sink = self.esM.getComponent('electricity_market_sink').aggregatedCommodityRevenueTimeSeries[
+                self.esM.investmentPeriodNames.index(ip)
+            ]
+            market_sink = market_sink.unstack(level=-1)
+            market_sink.columns = market_sink.columns.droplevel()
+
+            market_source_full = []
+            market_sink_full = []
+            for p in self.esM.periodsOrder[self.esM.investmentPeriodNames.index(ip)]:
+                market_source_full.append(market_source.loc[p])
+                market_sink_full.append(market_sink.loc[p])
+            market_source_ts = pd.concat(market_source_full, axis=0, ignore_index=True)
+            market_sink_ts = pd.concat(market_sink_full, axis=0, ignore_index=True)
+
+            self.market_source_df[ip] = market_source_ts
+            self.market_sink_df[ip] = market_sink_ts
 

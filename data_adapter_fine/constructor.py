@@ -17,8 +17,16 @@ class ComponentConstructor:
         self.scalars = process[1].scalars.set_index('year')
         self.scalars = utils.drop_unused_columns(self.scalars)
         self.scalars.index = self.scalars.index.astype(int)
-        # self.scalars = self.scalars.replace('global_scalars.wacc', 0.05) #TODO: remove
+        if process[0].endswith('_0') and 'capacity_tra_max' in self.scalars.columns and 'capacity_tra_min' in self.scalars.columns:
+            self.scalars = self.scalars.drop(columns=['capacity_tra_max', 'capacity_tra_min'])
+
+        # unpack lists in scalars
+        if self.scalars.applymap(lambda x: isinstance(x, list)).any().any():
+            self.scalars = self.scalars.applymap(lambda x: x[0] if isinstance(x, list) and len(x) > 0 else x)
+            self.scalars = self.scalars.applymap(lambda x: np.nan if isinstance(x, list) and len(x) == 0 else x)
         self.col_set = set(self.scalars.columns)
+        # cb_coefficient is not used in fine
+        self.col_set = self.col_set.difference({'cb_coefficient'})
         if not process[1].timeseries.empty:
             self.timeseries = {}
             raw_ts = process[1].timeseries
@@ -32,29 +40,35 @@ class ComponentConstructor:
         else:
             self.timeseries = None
 
-
         param_columns = [col for col in self.scalars if col in utils.param_mapping.keys()]
         if len(param_columns) > 0:
             param_df = self.interpolate_df(self.scalars[param_columns], esM)
-            if 'capacity_e_max'in param_df.columns: #TODO: adapt for storage
+            if 'capacity_e_max' in param_df.columns:
+                if not isinstance(self, StorageConstructor):
+                    raise ValueError(f"Capacity_e_max is only allowed for storage processes. "
+                                     f"Please check {process[0]}.")
                 param_df['capacity_e_max'] = param_df['capacity_e_max']/8760
             param_df.rename(columns=utils.param_mapping, inplace=True)
             param_df = self.set_tech_availability(param_df, esM)
             if param_df.columns.duplicated().any():
                 raise ValueError(f"Duplicate columns in {process[0]} scalars.")
+            if 'yearlyFullLoadHoursMax' in param_df.columns:
+                param_df['yearlyFullLoadHoursMax'] = param_df['yearlyFullLoadHoursMax'] / 100 * 8760
             self.fine_args = self.fine_args | param_df.to_dict('dict')
 
             if 'lifetime' in self.scalars.columns:
                 self.fine_args['economicLifetime'] = math.floor(self.scalars['lifetime'].mean())
             else:
-                logging.warning(f"Missing lifetime for {process[0]}. Default value 7 is used.")#TODO: change into error?
+                logging.warning(f"Missing lifetime for {process[0]}. Default value 7 is used.")
                 self.fine_args['economicLifetime'] = esM.investmentPeriodInterval
-                if self.fine_args['name'] in ['x2x_delivery_methane_pipeline_0']:  # TODO: remove
+                if self.fine_args['name'] in ['x2x_delivery_methane_pipeline_0']:
                     self.fine_args['economicLifetime'] = 56
             if 'wacc' in self.scalars.columns:
-                self.fine_args['interestRate'] = self.scalars['wacc'].astype(float).mean() / 100 #TODO: remove .astype(float)?
+                self.fine_args['interestRate'] = self.scalars['wacc'].astype(float).mean() / 100
+            else:
+                self.fine_args['interestRate'] = 0.02
 
-            if process[0].startswith('tra_road') and "motorc" not in process[0]:
+            if utils.check_floor_lifetime(process[0]):
                 self.fine_args['floorTechnicalLifetime'] = False
 
             if process[0].endswith('_0'):
@@ -75,7 +89,7 @@ class ComponentConstructor:
                 stock_commissioning = stock_commissioning.round(8)
                 self.fine_args['stockCommissioning'] = stock_commissioning.to_dict()
                 if len(param_df['capacityFix'][param_df['capacityFix']>0]) > rounded_lifetime / interval:
-                    if self.fine_args['name'] in ['x2x_delivery_methane_pipeline_0', 'x2x_x2gas_sr_syngas_0', 'x2x_storage_methane_0']: #TODO: remove
+                    if self.fine_args['name'] in ['x2x_delivery_methane_pipeline_0', 'x2x_x2gas_sr_syngas_0', 'x2x_storage_methane_0']:
                         logging.warning(f"Stock commissioning for {process[0]} exceeds economic lifetime.")
                     else:
                         raise ValueError(f"Stock commissioning for {process[0]} exceeds economic lifetime.")
@@ -101,19 +115,20 @@ class ComponentConstructor:
 
 
     def set_tech_availability(self, param_df, esM):
-        if param_df.isna().any().any():
+        if param_df.loc[:, param_df.columns != 'commissioningMax'].isna().any().any():
             self.fine_args['commissioningFix'] = {
                 ip: 0 if ip in param_df[param_df.isna().any(axis=1)].index.tolist()
                 else None
                 for ip in esM.investmentPeriodNames
             }
-        return param_df.fillna(0)
+            param_df = param_df.loc[:, param_df.columns != 'commissioningMax'].fillna(0)
+        return param_df.replace(np.nan, None)
 
     def interpolate_df(self, df, esM):
         for year in pd.Index(esM.investmentPeriodNames).difference(self.scalars.index):
             df.loc[year] = np.nan
         df = df.sort_index().astype('float64')
-        df = df.interpolate(method='index')
+        df = df.interpolate(method='index', limit_area='inside')
         return df.loc[esM.investmentPeriodNames]
 
 
@@ -125,7 +140,6 @@ class ConversionConstructor(ComponentConstructor):
             if (op_timeseries.sum() == 1).any():
                 raise ValueError("Operation timeseries sum must be 1.")
             self.fine_args['operationRateMax'] = op_timeseries.to_dict(orient='series')
-
 
         commodities_raw = process[1].inputs + process[1].outputs
         input_commodities = [
@@ -147,7 +161,16 @@ class ConversionConstructor(ComponentConstructor):
             commod
             for commod in commodities_raw
             if not isinstance(commod, list)
-            if not commod.startswith('emi')
+            if (
+                    not commod.startswith('emi')
+                    or commod in ['emi_co2_reusable', 'emi_co2_stored', 'emi_co2_neg_air_dacc']
+            )
+        ]
+        commodities_emissions = [
+            commod
+            for commod in commodities_raw
+            if not isinstance(commod, list)
+            if commod not in commodities_no_group
         ]
 
         ccf_columns = [col for col in self.scalars if col.startswith('conversion_factor')]
@@ -223,12 +246,33 @@ class ConversionConstructor(ComponentConstructor):
                 self.interpolate_df(self.scalars, esM)
             )
             self.fine_args['physicalUnit'] = utils.standard_units['vehicles']
+            for ip in esM.investmentPeriodNames:
+                self.fine_args['opexPerOperation'][ip] = (
+                        self.fine_args['opexPerOperation'][ip]
+                        * self.fine_args['commodityConversionFactors'][ip][main_commodity]
+                )
+
 
             self.col_set = self.col_set.difference({'market_share_range', 'mileage', 'occupancy_rate', 'tonnage'})
             if process[0].endswith('_0'):
                 self.col_set = self.col_set.difference({'share_tra_charge_mode'})
         if 'kWh/100km' in process[1].units.values():
             logging.warning(f"Please check ccf unit for {self.fine_args['name']}.")
+
+        if process[0] == 'helper_co2_delivery':
+            for ip in self.fine_args['commodityConversionFactors'].keys():
+                self.fine_args['commodityConversionFactors'][ip]['co2_equivalent'] = -1
+
+        for commod in commodities_emissions:
+            if commod in self.fine_args['commodityConversionFactors'][esM.investmentPeriodNames[0]].keys():
+                continue
+            if len(ef_columns) > 0 and commod in self.fine_args['emissionFactors'].keys():
+                continue
+            raise ValueError(f"Commodity {commod} not found in {self.fine_args['name']}.")
+
+        if (abs(ccf_df[main_commodity]) != 1).any():
+            logging.warning(f"Conversion factor for {main_commodity} is not 1. Please check {self.fine_args['name']}.")
+
         self.comps.append(
             fn.Conversion(
                 esM=esM,
@@ -254,7 +298,7 @@ class ConversionConstructor(ComponentConstructor):
                 elif 'max' in col:
                     flow_shares[ip]['max'][col[15:]] = fs_df[col].loc[ip] / factor
                 else:
-                    raise ValueError(f"Flow share column {col} must contain 'min' or 'max'.")#TODO: check for fix values
+                    raise ValueError(f"Flow share column {col} must contain 'min' or 'max'.")
         self.col_set = self.col_set.difference(fs_columns)
         return flow_shares
 
@@ -283,7 +327,7 @@ class SourceSinkConstructor(ComponentConstructor):
                         **self.fine_args
                     )
                 )
-                ccf = {process[0] + "_helper": -1}
+                ccf = {process[0] + "_helper": -1, process[1].outputs[0]: 1}
                 ef_columns = [col for col in self.scalars if col.startswith('ef')]
                 self.col_set = self.col_set.difference(ef_columns)
                 for col in ef_columns:
@@ -296,7 +340,7 @@ class SourceSinkConstructor(ComponentConstructor):
                     fn.Conversion(
                         esM=esM,
                         name=process[0] + "_conv_helper",
-                        physicalUnit='GW', #TODO change
+                        physicalUnit='GW',
                         commodityConversionFactors={ip: ccf for ip in esM.investmentPeriodNames},
                         hasCapacityVariable=False,
                     )
@@ -307,7 +351,7 @@ class SourceSinkConstructor(ComponentConstructor):
             if len(process[1].inputs) > 1:
                 raise ValueError(f"Process {process[0]} has to many inputs. Only one input per sink is allowed.")
             if 'demand_timeseries' in self.timeseries.keys():
-                ts = self.timeseries['demand_timeseries'] / self.timeseries['demand_timeseries'].sum() #TODO: remove when timeseries is updated/ normalized
+                ts = self.timeseries['demand_timeseries'] / self.timeseries['demand_timeseries'].sum()
                 self.fine_args['operationRateFix'] = (
                         ts * self.interpolate_df(self.scalars['demand_annual'], esM)
                 ).to_dict(orient='series')
@@ -330,6 +374,8 @@ class SourceSinkConstructor(ComponentConstructor):
                 else:
                     raise ValueError(f"Conversion factors for Source/ Sink must be equal to 1. "
                                      f"Error in {self.fine_args['name']} ")
+        if len(ccf_cols) > 1:
+            raise ValueError(f"Multiple conversion factors found in {self.fine_args['name']}.")
         return ccf_cols
 
 
@@ -359,11 +405,17 @@ class StorageConstructor(ComponentConstructor):
                 self.fine_args[ts[1]] = self.timeseries[ts[0]].to_dict(orient='series')
                 self.col_set = self.col_set.difference([ts[0]])
 
+        if 'helper' in process[0]:
+            self.fine_args['selfDischarge'] = 0
+
+        self.col_set = self.col_set.difference({'share_tra_charge_mode'})
+
         self.comps.append(
             fn.Storage(
                 esM=esM,
                 commodity=process[1].inputs[0],
                 hasCapacityVariable=True,
+                isPeriodicalStorage=True,
                 **self.fine_args
             )
         )

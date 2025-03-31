@@ -19,10 +19,14 @@ helper_commodities = [
 ]
 
 slack_sink_opex = {
-    'slack_sink_sec_naphtha_fos_orig': 100,
-    'slack_sink_sec_kerosene_fos_orig': 1,
-    'slack_sink_sec_refinery_gas': 100,
-    'slack_sink_sec_heat_low': 1,
+    'sec_naphtha': 0,
+    'sec_kerosene': 0,
+    'sec_refinery_gas': 0,
+    'sec_diesel': 0,
+    'sec_heat_low': 0,
+    'sec_elec_mcar_infl_uni': 0,
+    'sec_elec_mcar_flex_uni': 0,
+    'sec_elec_mcar_flex_bi': 0,
 }
 
 standard_units = {
@@ -35,12 +39,15 @@ standard_units = {
     'transport_pass_demand': 'Gpkm',
     'vehicles': 'kvehicles',
     'emissions': 'Mt',
+    'emi_ch4': 'kt',
+    'emi_n2o': 't',
     'pass_transport_ccf': 'Gpkm/kvehicles',
     'energy_transport_ccf': 'GWh/kvehicles',
     'power_per_vehicle': 'GW/kvehicles',
     'milage': 'Tm/(kvehicles*a)',
     'self_discharge': '%/h',
     'cost_per_capacity': 'MEUR/GW',
+    'cost_dac': 'MEUR/Mt',
     'cost_per_energy': 'MEUR/GWh',
     'cost_per_vehicle': 'MEUR/kvehicles',
     'cost_per_pkm': 'MEUR/Gpkm',
@@ -48,12 +55,15 @@ standard_units = {
     'specific_emission': 'Mt/GWh',
     'specific_emission_co2': 'MtCO2/GWh',
     'ccf_vehicles': 'GWh/100km',
-    # 'misc_ccf': 'MWh/MWh',
+    'ccf_dac': 'GWh/Mt',
+    'misc_ccf': 'MWh/MWh',
+    'misc_ccf2': 't/t',
     'misc_ts': 'kW/kW',
     'occupancy_rate': 'persons/vehicle',
 }
 
 param_mapping = {
+    'availability_constant': 'yearlyFullLoadHoursMax',
     'cost_fix_p': 'opexPerCapacity',
     'cost_fix_tra': 'opexPerCapacity',
     'cost_fix_w': 'opexPerCapacity',
@@ -73,11 +83,13 @@ param_mapping = {
     'capacity_p_inst_0': 'capacityFix',
     'capacity_p_inst': 'capacityFix',
     'capacity_e_inst': 'capacityFix',
-    'capacity_tra_inst_0': 'capacityFix',#TODO: check with Hedda if needed
+    'capacity_tra_inst_0': 'capacityFix',
     'lifetime': 'economicLifetime',
     'capacity_e_unit': 'capacityPerPlantUnit',
     'capacity_p_unit': 'capacityPerPlantUnit',
-    'capacity_p_abs_new_max': 'commissioningMax'
+    'capacity_p_abs_new_max': 'commissioningMax',
+    'capacity_w_abs_new_max': 'commissioningMax',
+    'capacity_e_abs_new_max': 'commissioningMax',
 }
 
 timeseries_mapping = {
@@ -96,11 +108,22 @@ storage_timeseries_mapping = {
     'sto_min_timeseries': 'stateOfChargeMin',
 }
 
+def check_floor_lifetime(process):
+    if process.startswith('tra_road') and "motorc" not in process[0]:
+        return True
+    if process in ['x2x_x2gas_sr_syngas_psa_0']:
+        return True
+    return False
+
 def get_commodity_unit(commodity):
     if commodity == 'veh':
         return standard_units['vehicles']
-    elif commodity.startswith('emi_'):
-        return 'Mt'
+    elif commodity.startswith('emi_co2'):
+        return standard_units['emissions']
+    elif commodity.startswith('emi_ch4'):
+        return standard_units['emi_ch4']
+    elif commodity.startswith('emi_n2o'):
+        return standard_units['emi_n2o']
     elif commodity.startswith('exo_road') and 'pkm' in commodity:
         return standard_units['transport_pass_demand']
     else:
@@ -113,7 +136,6 @@ def drop_unused_columns(df):
             'region',
             'comment',
             'bandwidth_type',
-
         ]
     return df.drop(unused_columns, axis=1)
 
