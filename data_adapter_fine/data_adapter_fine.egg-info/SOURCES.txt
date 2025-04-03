@@ -1,0 +1,9 @@
+LICENSE
+README.md
+setup.py
+data_adapter_fine/data_adapter_fine.egg-info/PKG-INFO
+data_adapter_fine/data_adapter_fine.egg-info/SOURCES.txt
+data_adapter_fine/data_adapter_fine.egg-info/dependency_links.txt
+data_adapter_fine/data_adapter_fine.egg-info/requires.txt
+data_adapter_fine/data_adapter_fine.egg-info/top_level.txt
+tests/test_something.py

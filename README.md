@@ -1,11 +1,11 @@
-# rli_template
-Template repository for creating new projects under the RLI's umbrella
+# SEDOS Data Adapter ETHOS.FINE
+A data adapter to translate sedos datasets to the ETHOS.FINE format and build an energy system model.
 
 ## Get started
 
-Simply click on the green `Use this template` button on the left of the `Clone or download` button.
+### Installation
 
-The detailed instructions to create a new repository from this template can be found [here](https://help.github.com/en/articles/creating-a-repository-from-a-template).
+
 
 ## src folder
 
