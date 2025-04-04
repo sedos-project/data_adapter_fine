@@ -23,6 +23,7 @@ class DataAdapter:
             structure_name: str,
             process_sheet: str,
             helper_sheet: str,
+            scenario_name: str,
             downloadData: bool = True,
             veh_class: str = '',
     ):
@@ -30,7 +31,7 @@ class DataAdapter:
         if downloadData:
             databus.download_collection(url)
         self.collection_name = url.split('/')[-1]
-        self.scenario = 'f_tra_tokio_final'
+        self.scenario = scenario_name
         self.bev_constraint_data = {}
         self.constructor_dict = {}
 
@@ -427,14 +428,14 @@ class DataAdapter:
             optimizationSpecs=optimization_specs,
             solver="gurobi"
         )
-        self.check_slacks(
-            exclusion_list=[
-                'slack_sink_sec_kerosene',
-                'slack_sink_sec_naphtha',
-                'slack_sink_sec_refinery_gas',
-                'slack_sink_sec_heat_low'
-            ]
-        )
+        # self.check_slacks(
+        #     exclusion_list=[
+        #         'slack_sink_sec_kerosene',
+        #         'slack_sink_sec_naphtha',
+        #         'slack_sink_sec_refinery_gas',
+        #         'slack_sink_sec_heat_low'
+        #     ]
+        # )
 
     def export_results(self):
         results_df = pd.DataFrame()

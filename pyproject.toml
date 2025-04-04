@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["data_adapter_fine"]
+
+[project]
+name = "data_adapter_fine"
+version = "1.0.0"
+description = "SEDOS data adapter for ETHOS.FINE"
+readme = "README.md"
+authors = [
+    { name = "Johannes Behrens", email = "j.behrens@fz-juelich.de"},
+]
+maintainers = [
+    { name = "Johannes Behrens", email = "j.behrens@fz-juelich.de"},
+]
+
+dependencies = [
+    "fine<=2.4.1",
+    "pip",
+    "data_adapter@git+https://github.com/sedos-project/data_adapter@feature/store_foreign_data",
+]
+
+requires-python = ">=3.10,<3.13"
