@@ -4,41 +4,22 @@ A data adapter to translate sedos datasets to the ETHOS.FINE format and build an
 ## Get started
 
 ### Installation
+ - create environment with conda/ mamba using the `environment.yml` file
+ - install the package using `pip install -e . --no-deps` in the root folder of the repository
 
+## data_adapter_fine folder
+This folder contains the main code of the data adapter. It is structured as follows:
+ - dataAdapter.py: contains the main code of the data adapter
+ - constructor.py: contains the code to build the components of the energy system model
+ - utils.py: contains utility functions used in the data adapter
+ - postprocess.py: contains the code to post-process the data and create figures
 
+## collections folder
+This folder contains the data package used to build the energy system model. New data from the OEP will be saved here.
 
-## src folder
+## examples folder
+This folder contains examples of how to use the data adapter. It is structured as follows:
+ - example.py: contains an example of how to use the data adapter
 
-This folder is where you should place the code of your package (package name to be edited in `setup.py` under name)
-
-You can install it locally for developing with
-
-    python setup.py install
-    
-More details for packaging are available on [https://packaging.python.org](https://packaging.python.org/tutorials/packaging-projects/)
-
-
-## Docs
-
-To build the docs simply go to the `docs` folder
-
-    cd docs
-
-Install the requirements
-
-    pip install -r docs_requirements.txt
-
-and run
-
-    make html
-
-The output will then be located in `docs/_build/html` and can be opened with your favorite browser
-
-## Code linting
-
-In this template, 3 possible linters are proposed:
-- flake8 only sends warnings and error about linting (PEP8)
-- pylint sends warnings and error about linting (PEP8) and also allows warning about imports order
-- black sends warning but can also fix the files for you
-
-You can perfectly use the 3 of them or subset, at your preference. Don't forget to edit `.travis.yml` if you want to deactivate the automatic testing of some linters!
+# structures folder
+This folder contains xlsx files for model structures. New structure files need to be saved here.
