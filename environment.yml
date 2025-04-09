@@ -9,4 +9,4 @@ dependencies:
   - fine<=2.4.1
   - pip
   - pip:
-    - git+https://github.com/sedos-project/data_adapter@feature/store_foreign_data
+    - git+https://github.com/sedos-project/data_adapter
