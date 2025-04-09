@@ -1,4 +1,4 @@
-name: data_adapter_fine_test
+name: data_adapter_fine
 
 channels:
   - conda-forge
@@ -9,4 +9,4 @@ dependencies:
   - fine<=2.4.1
   - pip
   - pip:
-    - git+https://github.com/sedos-project/data_adapter
+    - git+https://github.com/sedos-project/data_adapter@dev
