@@ -428,14 +428,7 @@ class DataAdapter:
             optimizationSpecs=optimization_specs,
             solver="gurobi"
         )
-        # self.check_slacks(
-        #     exclusion_list=[
-        #         'slack_sink_sec_kerosene',
-        #         'slack_sink_sec_naphtha',
-        #         'slack_sink_sec_refinery_gas',
-        #         'slack_sink_sec_heat_low'
-        #     ]
-        # )
+
 
     def export_results(self):
         results_df = pd.DataFrame()

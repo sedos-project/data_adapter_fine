@@ -94,7 +94,7 @@ def plot_bev_operation(da, ip):
     ax.legend(combined_handles, combined_labels, loc='upper center', bbox_to_anchor=(0.5, -0.15), ncol=2)
     # Adjust layout to make room for the legend
     plt.tight_layout()
-    plt.savefig('output/Wallbox.svg')
+    plt.savefig('output/Wallbox_' + da.scenario + '.svg')
     plt.show()
 
 def plot_bev_costs_revenue(da):
@@ -164,7 +164,7 @@ def plot_bev_costs_revenue(da):
 
     # Adjust layout to make room for the legend
     plt.tight_layout()
-    plt.savefig('output/BEV_elec_costs.svg')
+    plt.savefig('output/BEV_elec_costs_' + da.scenario + '.svg')
     # Show the plot
     plt.show()
 
@@ -194,7 +194,7 @@ def plot_tac(da):
     plt.legend(loc='upper left', bbox_to_anchor=(1, 1))
     # Adjust layout to make room for the legend
     plt.tight_layout()
-    plt.savefig('output/costs.svg')
+    plt.savefig('output/costs_' + da.scenario + '.svg')
     plt.show()
 
 def plot_capacities(da, veh_class, results):
@@ -295,7 +295,7 @@ def plot_capacities(da, veh_class, results):
 
     # Show the plot
     plt.show()
-    plt.savefig('output/capacity.svg')
+    plt.savefig('output/capacity_' + da.scenario + '.svg')
 
 def plot_pri_energy(da, veh_class):
     # Generate a list of unique colors
@@ -337,7 +337,7 @@ def plot_pri_energy(da, veh_class):
 
     # Show the plot
     plt.show()
-    plt.savefig('output/pri_energy_import.png')
+    plt.savefig('output/pri_energy_import_' + da.scenario + '.svg')
 
 def plot_operation_stacked(da, results):
 
@@ -375,7 +375,7 @@ def plot_operation_stacked(da, results):
     plt.legend(loc='upper center', bbox_to_anchor=(0.5, -0.15), ncol=4)
     plt.tight_layout()
 
-    plt.savefig('output/operation.svg')
+    plt.savefig('output/operation_' + da.scenario + '.svg')
     plt.show()
 
 def plot_co2(da, results):
@@ -456,5 +456,5 @@ def plot_co2(da, results):
 
     # Adjust layout to make room for the legend
     plt.tight_layout()
-    plt.savefig('output/co2.svg')
+    plt.savefig('output/co2_' + da.scenario + '.svg')
     plt.show()
