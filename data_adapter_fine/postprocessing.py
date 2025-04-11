@@ -294,8 +294,8 @@ def plot_capacities(da, veh_class, results):
     plt.tight_layout(rect=[0, 0.05, 1, 1])
 
     # Show the plot
-    plt.show()
     plt.savefig('output/capacity_' + da.scenario + '.svg')
+    plt.show()
 
 def plot_pri_energy(da, veh_class):
     # Generate a list of unique colors
@@ -336,8 +336,8 @@ def plot_pri_energy(da, veh_class):
     plt.tight_layout()
 
     # Show the plot
-    plt.show()
     plt.savefig('output/pri_energy_import_' + da.scenario + '.svg')
+    plt.show()
 
 def plot_operation_stacked(da, results):
 
